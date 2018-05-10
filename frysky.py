@@ -2,7 +2,9 @@
 # coding=UTF-8
 
 from tkinter import *
+import _thread
 from rand_coord import next_rand_coord
+from frysky_parser import FrySkyParserThread
 import os.path
 import json
 
@@ -16,6 +18,9 @@ CELL_CAPTION_WIDTH = 18
 
 SETTINGS_FILE = 'settings.json'
 
+INPUT_TEST = 'dump.bin'
+
+MODE = 'test'
 
 class Gui(Tk):
     cells = (
@@ -76,6 +81,14 @@ class Gui(Tk):
                                  bg='#eeeeee')
             cell['cell'].grid(row=row_cntr, column=1)
             row_cntr += 1
+
+        if MODE == 'test':
+            in_file = open(INPUT_TEST, 'rb')
+        else:
+            print('Only test mode now')
+
+        self.parser = FrySkyParserThread(in_file)
+        self.parser.start()
 
         self.after(1000, self.updater)
 
