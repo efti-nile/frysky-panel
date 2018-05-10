@@ -9,3 +9,4 @@ def next_rand_coord():
     coor = (coor[0] + STEP * (random() - 0.5),
             coor[1] + STEP * (random() - 0.5))
     return coor
+
