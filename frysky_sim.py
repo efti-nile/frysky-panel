@@ -100,7 +100,7 @@ def gen_frysky_dump():
                     deg_long = floor(gps_pnt[0])
                     min_long = (gps_pnt[0] - deg_long) * 60.0
                     deg_lat = floor(gps_pnt[1])
-                    min_lat = (gps_pnt[1] - deg_long) * 60.0
+                    min_lat = (gps_pnt[1] - deg_lat) * 60.0
                     before_point_long = deg_long * 100 + floor(min_long)
                     after_point_long = round((min_long - floor(min_long)) * 10000)
                     before_point_lat= deg_lat * 100 + floor(min_lat)
