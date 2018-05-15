@@ -36,14 +36,14 @@ prim_to_par = {  # Parameters names by their PRIMs
 
 
 class FrySkyParserThread(threading.Thread):
-    out_params = []
 
     def __init__(self, input_stream):
         threading.Thread.__init__(self)
         self.input_stream = input_stream
+        self.lock = threading.Lock()
+        self.out_params = []
 
     def run(self):
-        global out_params
         state = IDLE
         gps_flags = 0x00
         pack_cntr = 0
@@ -81,13 +81,13 @@ class FrySkyParserThread(threading.Thread):
                 elif state == TEL_PACK_START and cur_byte == 0xFE:
                     state = TEL_PACK
                 elif state == TEL_PACK:
-                    self.out_params.append(('vlt', 4.2 * (cur_byte / 256.0)))
+                    self.push_param('vlt', 4.2 * (cur_byte / 256.0))
                     state = TEL_PACK_VLT
                 elif state == TEL_PACK_VLT:
-                    self.out_params.append(('cur', 100.0 * (cur_byte / 256.0)))
+                    self.push_param('cur', 100.0 * (cur_byte / 256.0))
                     state = TEL_PACK_CUR
                 elif state == TEL_PACK_CUR:
-                    self.out_params.append(('sig_lev', cur_byte))
+                    self.push_param('sig_lev', cur_byte)
                     state = TEL_PACK_SIG_LEV
                 elif state == TEL_PACK_SIG_LEV and cur_byte == 0x7E:
                     state = IDLE
@@ -119,21 +119,26 @@ class FrySkyParserThread(threading.Thread):
                         gps_flags |= GPS_LAT_AFT_PNT
                         gps_lat_aft_pnt = par_msb_byte * 256 + par_lsb_byte
                     else:
-                        self.out_params.append((par_name, par_msb_byte * 256 + par_lsb_byte))
+                        self.push_param(par_name, par_msb_byte * 256 + par_lsb_byte)
                     state = HUB_PAR_MSB
                 elif state == HUB_PAR_MSB and cur_byte == 0x5E:
                     state = IDLE
 
                 # GPS processing
-                if gps_flags & GPS_LONG_BEF_PNT and gps_flags & GPS_LONG_AFT_PNT:
+                if gps_flags == (GPS_LONG_BEF_PNT | GPS_LONG_AFT_PNT | GPS_LAT_BEF_PNT | GPS_LAT_AFT_PNT):
+                    # Longitude
                     long_deg = gps_long_bef_pnt // 100
                     long_min = (gps_long_bef_pnt - long_deg * 100.0) + (gps_long_aft_pnt / 1000.0)
                     long = long_deg + (long_min / 60.0)
-                    self.out_params.append(('long', long))
-                    gps_flags = gps_flags & (GPS_LAT_BEF_PNT | GPS_LAT_AFT_PNT)
-                if gps_flags & GPS_LAT_BEF_PNT and gps_flags & GPS_LAT_AFT_PNT:
+                    # Latitude
                     lat_deg = gps_lat_bef_pnt // 100
                     lat_min = (gps_lat_bef_pnt - lat_deg * 100.0) + (gps_lat_aft_pnt / 1000.0)
                     lat = lat_deg + (lat_min / 60.0)
-                    self.out_params.append(('lat', lat))
-                    gps_flags = gps_flags & (GPS_LONG_BEF_PNT | GPS_LONG_AFT_PNT)
+                    self.push_param('coor', (long, lat))
+                    gps_flags &= ~(GPS_LONG_BEF_PNT | GPS_LONG_AFT_PNT | GPS_LAT_BEF_PNT | GPS_LAT_AFT_PNT)
+
+    def push_param(self, par_name, par_val):
+        self.lock.acquire(blocking=1)
+        self.out_params.append((par_name, par_val))
+        self.lock.release()
+        time.sleep(0.001)
