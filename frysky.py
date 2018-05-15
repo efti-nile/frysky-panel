@@ -5,7 +5,9 @@ from tkinter import *
 from frysky_parser import FrySkyParserThread
 import os.path
 import json
+import serial
 from PIL import Image
+from tkinter import filedialog
 
 MAIN_WINDOW_TITLE = 'FrySky View Panel'
 MAIN_WINDOW_HEIGHT = 600
@@ -13,6 +15,9 @@ MAIN_WINDOW_WIDTH = 900
 CANVAS_MARG = 50
 
 SETTINGS_BUTTON_PROMPT = 'ctrl + \'S\': COM settings'
+OPEN_DUMP_FILE_PROMPT = 'ctrl + \'D\': open dump file'
+
+BAUD_RATES = ['9600', '19200', '38400', '115200']
 
 CELL_CAPTION_WIDTH = 18
 
@@ -21,8 +26,6 @@ SETTINGS_FILE = 'settings.json'
 INPUT_TEST = 'dump.bin'
 
 MAP_FILE = 'map.png'
-
-MODE = 'test'
 
 MAP_LONG_MIN = 53.32605 - 0.01
 MAP_LONG_MAX = (53.32605 + 0.03578) + 0.01
@@ -60,6 +63,7 @@ class Gui(Tk):
         inpan.grid(row=0, column=0, columnspan=1)
 
         Label(inpan, text=SETTINGS_BUTTON_PROMPT, anchor='s').grid(row=1, column=0, sticky='S')
+        Label(inpan, text=OPEN_DUMP_FILE_PROMPT, anchor='s').grid(row=2, column=0, sticky='S')
 
         self.can = Canvas(self, width=MAIN_WINDOW_WIDTH * 2 // 3, height=MAIN_WINDOW_HEIGHT,
                           background='#ffffff')
@@ -83,17 +87,53 @@ class Gui(Tk):
             cell['cell'].grid(row=row_cntr, column=1)
             row_cntr += 1
 
-        if MODE == 'test':
-            in_file = open(INPUT_TEST, 'rb')
-        else:
-            print('Only test mode now')
-
-        self.parser = FrySkyParserThread(in_file)
-        self.parser.start()
-
         self.img = Image.open(MAP_FILE)
 
+        self.csd = None
+        self.com_port = None
+        self.dump_file = None
+        self.parser = None
+
         self.after(10, self.updater)
+
+        self.bind('<Control-s>', self.open_com_settings_dialog)
+
+    def open_com_settings_dialog(self, event):
+        self.csd = Toplevel(self)
+        self.csd.title('COM Settings')
+        Label(self.csd, text='COM port:').grid(row=0, column=0)
+        self.csd.com_str = StringVar()
+        self.csd.com_str_entry = Entry(self.csd, textvariable=self.csd.com_str)
+        self.csd.com_str_entry.grid(row=0, column=1)
+        Label(self.csd, text='Baudrate:').grid(row=1, column=0)
+        self.csd.baudrate_listbox = Listbox(self.csd)
+        for item in BAUD_RATES:
+            self.csd.baudrate_listbox.insert(END, item)
+        self.csd.baudrate_listbox.grid(row=1, column=1)
+        self.csd.ok_button = Button(self.csd, text='Open COM port', command=self.open_com_port)
+        self.csd.ok_button.grid(row=2, column=0, columnspan=2)
+        
+    def open_com_port(self):
+        com_str = self.csd.com_str.get()
+        if not com_str:
+            return
+        baudrate_idx = self.csd.baudrate_listbox.curselection()[0]
+        if baudrate_idx:
+            baudrate = BAUD_RATES[baudrate_idx]
+        else:
+            return
+        self.com_port = serial.Serial(com_str, baudrate)
+        self.parser = FrySkyParserThread(self.com_port)
+        self.parser.start()
+
+    def open_dump_file(self):
+        dump_file_name = filedialog.askopenfilename()
+        if dump_file_name:
+            self.dump_file = open(dump_file_name, 'rb')
+            self.parser = FrySkyParserThread(self.com_port)
+            self.parser.start()
+        else:
+            return
 
     def updater(self):
         self.parser.lock.acquire(blocking=1)
