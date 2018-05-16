@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 # coding=UTF-8
 
+from tkinter.messagebox import showerror
+from tkinter.simpledialog import askfloat
 from tkinter import *
 from frysky_parser import FrySkyParserThread
 import os.path
@@ -10,21 +12,20 @@ from PIL import Image
 from tkinter import filedialog
 
 MAIN_WINDOW_TITLE = 'FrySky View Panel'
+COM_SETTINGS_TITLE = 'COM settings'
 MAIN_WINDOW_HEIGHT = 600
 MAIN_WINDOW_WIDTH = 900
-CANVAS_MARG = 50
+CANVAS_MARGIN_PX = 50
 
 SETTINGS_BUTTON_PROMPT = 'ctrl + \'S\': COM settings'
 OPEN_DUMP_FILE_PROMPT = 'ctrl + \'D\': open dump file'
+STOP_PARSING_PROMPT = 'ctrl + \'C\': stop parsing'
 
-BAUD_RATES = ['9600', '19200', '38400', '115200']
+STD_BAUDRATES_TABLE = ['9600', '19200', '38400', '115200']
 
 CELL_CAPTION_WIDTH = 18
 
 SETTINGS_FILE = 'settings.json'
-
-INPUT_TEST = 'dump.bin'
-
 MAP_FILE = 'map.png'
 
 MAP_LONG_MIN = 53.32605 - 0.01
@@ -32,6 +33,7 @@ MAP_LONG_MAX = (53.32605 + 0.03578) + 0.01
 MAP_LAT_MIN = 50.21002 - 0.01
 MAP_LAT_MAX = 50.2458 + 0.01
 MAP_WIDTH = 0.05578
+
 
 class Gui(Tk):
     cells = (
@@ -62,8 +64,10 @@ class Gui(Tk):
                       width=MAIN_WINDOW_WIDTH // 3, height=MAIN_WINDOW_HEIGHT)
         inpan.grid(row=0, column=0, columnspan=1)
 
-        Label(inpan, text=SETTINGS_BUTTON_PROMPT, anchor='s').grid(row=1, column=0, sticky='S')
-        Label(inpan, text=OPEN_DUMP_FILE_PROMPT, anchor='s').grid(row=2, column=0, sticky='S')
+        self.top_prompt = Label(inpan, text=SETTINGS_BUTTON_PROMPT, anchor='s')
+        self.btm_prompt = Label(inpan, text=OPEN_DUMP_FILE_PROMPT, anchor='s')
+        self.top_prompt.grid(row=1, column=0, sticky='S')
+        self.btm_prompt.grid(row=2, column=0, sticky='S')
 
         self.can = Canvas(self, width=MAIN_WINDOW_WIDTH * 2 // 3, height=MAIN_WINDOW_HEIGHT,
                           background='#ffffff')
@@ -75,8 +79,6 @@ class Gui(Tk):
 
         genpan_cap = Label(genpan, text='General info', bg='#cccccc')
         genpan_cap.grid(row=0, column=0, sticky='ew', columnspan=2)
-
-        self.leading_mark = None
 
         row_cntr = 2
         for cell in self.cells:
@@ -93,22 +95,55 @@ class Gui(Tk):
         self.com_port = None
         self.dump_file = None
         self.parser = None
+        self.leading_mark = None
+        self.img_res = None
+        self.img_rescrop = None
+        self.canv = None
 
-        self.after(10, self.updater)
+        self.coor_min_long, self.coor_max_long = 361.0, -1.0
+        self.coor_min_lat, self.coor_max_lat = 361.0, -1.0
 
+        self.set_idle_app_state()
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def set_idle_app_state(self, event=None):
         self.bind('<Control-s>', self.open_com_settings_dialog)
+        self.bind('<Control-d>', self.open_dump_file)
+        self.unbind('<Control-c>')
+        self.top_prompt.config(text=SETTINGS_BUTTON_PROMPT)
+        self.btm_prompt.config(text=OPEN_DUMP_FILE_PROMPT)
+        if self.com_port:
+            self.com_port.close()
+            self.com_port = None
+        if self.dump_file:
+            self.dump_file = None
+        if self.parser:
+            self.parser.term_sig = True
+            self.parser = None
+        self.coor = []
+
+    def set_active_app_state(self):
+        self.unbind('<Control-s>',)
+        self.unbind('<Control-d>')
+        self.bind('<Control-c>', self.set_idle_app_state)
+        self.top_prompt.config(text=STOP_PARSING_PROMPT)
+        self.btm_prompt.config(text='')
 
     def open_com_settings_dialog(self, event):
         self.csd = Toplevel(self)
-        self.csd.title('COM Settings')
+        self.csd.title(COM_SETTINGS_TITLE)
         Label(self.csd, text='COM port:').grid(row=0, column=0)
         self.csd.com_str = StringVar()
+        if 'com_str' in self.settings:
+            self.csd.com_str.set(self.settings['com_str'])
         self.csd.com_str_entry = Entry(self.csd, textvariable=self.csd.com_str)
         self.csd.com_str_entry.grid(row=0, column=1)
         Label(self.csd, text='Baudrate:').grid(row=1, column=0)
         self.csd.baudrate_listbox = Listbox(self.csd)
-        for item in BAUD_RATES:
+        for item in STD_BAUDRATES_TABLE:
             self.csd.baudrate_listbox.insert(END, item)
+        if 'baudrate_idx' in self.settings:
+            self.csd.baudrate_listbox.select_set(self.settings['baudrate_idx'])
         self.csd.baudrate_listbox.grid(row=1, column=1)
         self.csd.ok_button = Button(self.csd, text='Open COM port', command=self.open_com_port)
         self.csd.ok_button.grid(row=2, column=0, columnspan=2)
@@ -116,26 +151,49 @@ class Gui(Tk):
     def open_com_port(self):
         com_str = self.csd.com_str.get()
         if not com_str:
+            showerror('Error', 'Specify COM-port')
             return
-        baudrate_idx = self.csd.baudrate_listbox.curselection()[0]
-        if baudrate_idx:
-            baudrate = BAUD_RATES[baudrate_idx]
-        else:
+        baudrate_idx = self.csd.baudrate_listbox.curselection()
+        if not baudrate_idx:
+            showerror('Error', 'Specify baud rate')
             return
-        self.com_port = serial.Serial(com_str, baudrate)
+        baudrate_idx = baudrate_idx[0]
+        baudrate = STD_BAUDRATES_TABLE[baudrate_idx]
+        self.settings['com_str'] = com_str
+        self.settings['baudrate_idx'] = baudrate_idx
+        try:
+            self.com_port = serial.Serial(com_str, baudrate)
+        except serial.SerialException:
+            showerror('Error', 'Can\'t open specified port')
+            return
         self.parser = FrySkyParserThread(self.com_port)
         self.parser.start()
+        self.set_active_app_state()
+        self.after(10, self.updater)
+        self.csd.destroy()
 
-    def open_dump_file(self):
-        dump_file_name = filedialog.askopenfilename()
-        if dump_file_name:
-            self.dump_file = open(dump_file_name, 'rb')
-            self.parser = FrySkyParserThread(self.com_port)
-            self.parser.start()
-        else:
+    def open_dump_file(self, event):
+        dump_file_name = filedialog.askopenfilename(filetypes=(('binary', '*.bin'), ('all', '*.*')))
+        if not dump_file_name:
+            showerror('Error', 'No file selected')
             return
+        if not os.path.exists(dump_file_name):
+            showerror('Error', 'File not found')
+            return
+        delay_ms = askfloat('Input', 'Which UI delay set between packets (ms)?')
+        if delay_ms is None:
+            delay_ms = 0.0
+        self.dump_file = open(dump_file_name, 'rb')
+        self.parser = FrySkyParserThread(self.dump_file)
+        self.parser.set_pause(delay_ms)
+        self.parser.start()
+        self.set_active_app_state()
+        self.after(10, self.updater)
 
     def updater(self):
+        if not self.parser:
+            return
+
         self.parser.lock.acquire(blocking=1)
         new_params = self.parser.out_params
         self.parser.out_params = []
@@ -189,9 +247,9 @@ class Gui(Tk):
                     self.img_res = self.img.resize((map_px_width, map_px_height), Image.ANTIALIAS)
 
                     # calculate coordinates of lower left corner
-                    marg_deg = float(CANVAS_MARG) / self.px_per_deg
-                    long_llcc = self.coor_min_long - marg_deg
-                    lat_llcc =  self.coor_min_lat - marg_deg
+                    margin_deg = float(CANVAS_MARGIN_PX) / self.px_per_deg
+                    long_llcc = self.coor_min_long - margin_deg
+                    lat_llcc = self.coor_min_lat - margin_deg
 
                     # calculate map coordinates
                     map_x_offset = round((long_llcc - MAP_LONG_MIN) * self.px_per_deg)
@@ -227,11 +285,11 @@ class Gui(Tk):
         can_w = MAIN_WINDOW_WIDTH * 2 // 3
         can_h = MAIN_WINDOW_HEIGHT
         
-        x1_ = (x1 - can_w / 2) * ((can_w - CANVAS_MARG) / can_w) + can_w / 2
-        y1_ = (y1 - can_h / 2) * ((can_h - CANVAS_MARG) / can_h) + can_h / 2
+        x1_ = (x1 - can_w / 2) * ((can_w - CANVAS_MARGIN_PX) / can_w) + can_w / 2
+        y1_ = (y1 - can_h / 2) * ((can_h - CANVAS_MARGIN_PX) / can_h) + can_h / 2
 
-        x2_ = (x2 - can_w / 2) * ((can_w - CANVAS_MARG) / can_w) + can_w / 2
-        y2_ = (y2 - can_h / 2) * ((can_h - CANVAS_MARG) / can_h) + can_h / 2
+        x2_ = (x2 - can_w / 2) * ((can_w - CANVAS_MARGIN_PX) / can_w) + can_w / 2
+        y2_ = (y2 - can_h / 2) * ((can_h - CANVAS_MARGIN_PX) / can_h) + can_h / 2
         
         self.can.create_line(x1_, y1_, x2_, y2_, smooth=1, width=2, fill='#ee1111')
         self.can_base = (new_base_x, new_base_y)
@@ -241,7 +299,6 @@ class Gui(Tk):
         if self.leading_mark:
             self.can.delete(self.leading_mark)
         self.leading_mark = self.can.create_oval(x2_ - 4, y2_ - 4, x2_ + 4, y2_ + 4, fill='red')
-
 
     def on_closing(self):
         with open(SETTINGS_FILE, 'w') as file:

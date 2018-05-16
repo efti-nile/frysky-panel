@@ -42,6 +42,11 @@ class FrySkyParserThread(threading.Thread):
         self.input_stream = input_stream
         self.lock = threading.Lock()
         self.out_params = []
+        self.term_sig = False
+        self.pause_s = 0.0
+
+    def set_pause(self, new_val_ms):
+        self.pause_s = new_val_ms * 1e-3
 
     def run(self):
         state = IDLE
@@ -49,7 +54,7 @@ class FrySkyParserThread(threading.Thread):
         pack_cntr = 0
         is_spec_byte_met = False
 
-        while True:
+        while not self.term_sig:
             chunk = self.input_stream.read()
             if chunk == b'':
                 time.sleep(INSTREAM_ACQ_PER)
@@ -91,8 +96,7 @@ class FrySkyParserThread(threading.Thread):
                     state = TEL_PACK_SIG_LEV
                 elif state == TEL_PACK_SIG_LEV and cur_byte == 0x7E:
                     state = IDLE
-                else:
-                    pass
+                    time.sleep(self.pause_s)
 
                 # Sensor hub parsing
                 if cur_byte == 0x5E and state == IDLE:
@@ -123,6 +127,7 @@ class FrySkyParserThread(threading.Thread):
                     state = HUB_PAR_MSB
                 elif state == HUB_PAR_MSB and cur_byte == 0x5E:
                     state = IDLE
+                    time.sleep(self.pause_s)
 
                 # GPS processing
                 if gps_flags == (GPS_LONG_BEF_PNT | GPS_LONG_AFT_PNT | GPS_LAT_BEF_PNT | GPS_LAT_AFT_PNT):
@@ -141,4 +146,3 @@ class FrySkyParserThread(threading.Thread):
         self.lock.acquire(blocking=1)
         self.out_params.append((par_name, par_val))
         self.lock.release()
-        time.sleep(0.001)
